@@ -1,0 +1,49 @@
+# Terraform state files — never commit
+*.tfstate
+*.tfstate.*
+*.tfstate.backup
+
+# Terraform plan files — may contain secrets
+*.tfplan
+*.tfplan.json
+
+# Terraform working directory
+**/.terraform/
+**/.terraform.lock.hcl
+
+# Variable files that may contain secrets
+# (commit *.tfvars only if they contain NO sensitive data)
+# *.tfvars
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+
+# Crash logs
+crash.log
+crash.*.log
+
+# Provider plugins
+.terraform.d/
+
+# OS artifacts
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Editor artifacts
+.vscode/settings.json
+*.swp
+*.swo
+
+# CI/CD artifacts
+tfplan-*.tfplan
+tfplan-*.json
+
+# PowerShell transcript logs (may contain sensitive output)
+*.pslog
+PowerShell_transcript*.txt
+
+# Vault token files — never commit
+.vault-token
+vault-token.txt

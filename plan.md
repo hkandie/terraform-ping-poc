@@ -787,3 +787,22 @@ DEV → QA → UAT → PROD
 - [GitLab CI/CD Documentation](https://docs.gitlab.com/ee/ci/)
 - [HashiCorp Vault Setup Guide](https://www.vaultproject.io/docs/get-started)
 - [Terraform Best Practices](https://www.terraform.io/cloud-docs/best-practices)
+
+---
+
+## 13. GAP RESOLUTIONS (from initial review)
+
+The following gaps identified during plan review have been addressed in the scaffolded files:
+
+| Gap | Resolution |
+|---|---|
+| **State locking** — local backend has no locking | `backend.tf` documents the limitation; jobs serialised by sequential stages + manual approvals; `resource_group` guidance added in `SETUP.md` |
+| **Vault token injection** — `$env:VAULT_TOKEN` origin undefined | Switched to **AppRole auth** in `fetch-secrets.ps1`: Role ID (plain) + Secret ID (masked) stored as GitLab CI Variables; short-lived token fetched and revoked per job |
+| **PingOne provider version** — `~> 0.18` outdated | Updated to `~> 1.0` in `terraform/provider.tf`; `region` renamed to `region_code` per v1 schema |
+| **Missing qa/uat tfvars** | `environments/qa.tfvars` and `environments/uat.tfvars` created with environment-appropriate policy values |
+| **No module resource examples** | All four modules (`authentication`, `users`, `applications`, `mfa`) contain actual `pingone_*` resources |
+| **No destroy/rollback pipeline job** | `destroy_dev` and `destroy_qa` jobs added to `.gitlab-ci.yml` (manual, `main` only; PROD excluded) |
+| **Branch strategy undocumented** | Documented in `README.md` — feature branches → dev auto; main → qa/uat/prod manual; tags → prod |
+| **No failure notifications** | GitLab native pipeline failure emails cover this; Teams/Slack webhooks can be added via GitLab project integrations (no pipeline YAML change required) |
+| **`.gitignore` not defined** | `.gitignore` created, excludes `*.tfstate`, `*.tfplan`, `.terraform/`, vault token files, PowerShell transcripts |
+| **No `.tflint.hcl`** | `.tflint.hcl` created with `tflint-ruleset-terraform` plugin, naming convention, documentation, and required_version rules |
