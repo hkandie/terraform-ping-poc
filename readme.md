@@ -36,6 +36,24 @@ validate → plan → apply_dev → apply_qa (manual) → apply_uat (manual) →
 | `main` | dev (auto) → qa/uat/prod (manual) |
 | `v*` tags | prod (manual, in addition to main) |
 
+## Installing Terraform on Windows
+
+1. Go to [https://developer.hashicorp.com/terraform/install#windows](https://developer.hashicorp.com/terraform/install#windows) and download the **Windows AMD64** zip for the required version (≥ 1.5.0).
+2. Extract the zip — it contains a single `terraform.exe` binary.
+3. Move `terraform.exe` to a permanent location, e.g. `C:\tools\terraform\`.
+4. Add that directory to the system `PATH`:
+   - Open **Start → Search "Edit the system environment variables"**
+   - Click **Environment Variables…**
+   - Under **System variables**, select `Path` → **Edit** → **New**
+   - Enter `C:\tools\terraform\` → **OK** through all dialogs
+5. Open a new PowerShell window and verify:
+   ```powershell
+   terraform -version
+   ```
+   Expected output: `Terraform v1.x.x`
+
+> The same steps apply for the GitLab Runner service account. Ensure the PATH change is made as a **system** variable (not user) so the runner process inherits it.
+
 ## Prerequisites
 
 - Windows GitLab Runner registered with tags: `windows`, `terraform`, `pingone`
