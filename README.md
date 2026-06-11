@@ -1,12 +1,12 @@
 # PingOne IDP Terraform — GitLab IaC Pipeline
 
-Manages PingOne Identity Provider resources via Terraform, deployed through a Windows GitLab Runner with secrets sourced from an on-premises HashiCorp Vault.
+Manages PingOne Identity Provider resources via Terraform, deployed through a Linux GitLab Runner with secrets sourced from an on-premises HashiCorp Vault.
 
 ## Quick Links
 
 | Document | Purpose |
 |---|---|
-| [SETUP.md](SETUP.md) | Runner installation, Vault setup, state share |
+| [SETUP.md](SETUP.md) | Runner installation, Vault setup, network connectivity |
 | [SIMULATION.md](SIMULATION.md) | Testing scenarios and demo walkthroughs |
 | [docs/architecture.md](docs/architecture.md) | Component diagram and data flow |
 | [docs/runbook.md](docs/runbook.md) | Day-2 operations and approvals |
@@ -57,6 +57,43 @@ validate → plan → apply_dev → apply_qa (manual) → apply_uat (manual) →
 
 > For the GitLab Runner service account, ensure the PATH is configured at the system level or through the runner's startup script so it inherits the binary location.
 
+## Installing and Registering a Linux GitLab Runner
+
+1. **Install the GitLab Runner binary** — Follow [SETUP.md Section 1](SETUP.md#1-linux-gitlab-runner) for complete installation steps on Ubuntu, CentOS, or other Linux distributions.
+
+2. **Register the runner with your GitLab instance:**
+   ```bash
+   sudo gitlab-runner register \
+     --url https://your-gitlab-instance.com/ \
+     --registration-token YOUR_TOKEN \
+     --executor shell \
+     --shell bash \
+     --description "Linux IaC Runner — PingOne" \
+     --tag-list linux,terraform,pingone \
+     --run-untagged false
+   ```
+   > Get `YOUR_TOKEN` from GitLab → Project → Settings → CI/CD → Runners → **New project runner**.
+
+3. **Start the runner service:**
+   ```bash
+   sudo gitlab-runner install --user git
+   sudo systemctl start gitlab-runner
+   sudo systemctl enable gitlab-runner
+   ```
+
+4. **Verify the runner is online:**
+   - GitLab → Project → Settings → CI/CD → Runners
+   - You should see your runner with a green "online" status and tags `linux`, `terraform`, `pingone`
+
+5. **Validate connectivity** (optional but recommended):
+   ```bash
+   cd /path/to/terraform-ping-poc
+   ./scripts/health-check.sh
+   ```
+   This verifies Terraform, TFLint, curl, jq, DNS resolution, and network connectivity to Vault and PingOne APIs.
+
+> **Runner offline?** Ensure the runner service is started (`systemctl status gitlab-runner`), and the machine has network connectivity to GitLab. See [docs/troubleshooting.md](docs/troubleshooting.md) for more help.
+
 ## Prerequisites
 
 - Linux GitLab Runner registered with tags: `linux`, `terraform`, `pingone`
@@ -89,9 +126,9 @@ validate → plan → apply_dev → apply_qa (manual) → apply_uat (manual) →
 │   ├── uat.tfvars
 │   └── prod.tfvars
 ├── scripts/
-│   ├── fetch-secrets.ps1      # Vault AppRole secret retrieval
-│   ├── validate.ps1           # Local pre-push validation
-│   ├── apply-promotion.ps1    # Manual promotion outside CI
+│   ├── fetch-secrets.sh      # Vault AppRole secret retrieval
+│   ├── validate.sh           # Local pre-push validation
+│   ├── apply-promotion.sh    # Manual promotion outside CI
 │   ├── drift-detection.sh    # Config drift check
 │   └── health-check.sh       # Runner connectivity validation
 └── docs/

@@ -1,0 +1,27 @@
+# =============================================================================
+# Apply Template — Reusable for dev, qa, uat, prod environments
+# Handles Terraform init, plan retrieval, and apply
+# =============================================================================
+
+.apply_template: &apply_template
+  script:
+    - echo "Deploying to $ENVIRONMENT..."
+    - source "${CI_PROJECT_DIR}/scripts/fetch-secrets.sh" "$ENVIRONMENT" "$VAULT_ADDR" "$VAULT_ROLE_ID" "$VAULT_SECRET_ID"
+    - cd $TF_ROOT
+    - |
+      terraform init \
+        -backend-config="address=$TF_STATE_BASE/pingone-$ENVIRONMENT" \
+        -backend-config="lock_address=$TF_STATE_BASE/pingone-$ENVIRONMENT/lock" \
+        -backend-config="unlock_address=$TF_STATE_BASE/pingone-$ENVIRONMENT/lock" \
+        -input=false -reconfigure
+    - |
+      terraform apply -auto-approve \
+        -var-file="${CI_PROJECT_DIR}/environments/$ENVIRONMENT.tfvars" \
+        -input=false -lock=true -lock-timeout=5m
+    - echo "$ENVIRONMENT deployment complete."
+  resource_group: terraform-$ENVIRONMENT
+  environment:
+    action: start
+  retry:
+    max: 1
+    when: runner_system_failure

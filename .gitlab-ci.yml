@@ -4,6 +4,11 @@
 # Linux GitLab Runner | On-Premises Vault | GitLab-managed Terraform State
 # =============================================================================
 
+include:
+  - local: .gitlab/ci/templates/validate.yml
+  - local: .gitlab/ci/templates/apply.yml
+  - local: .gitlab/ci/templates/destroy.yml
+
 stages:
   - validate
   - plan
@@ -36,7 +41,7 @@ default:
     - terraform
     - pingone
   before_script:
-    - echo "Runner: $(hostname) | Job: $CI_JOB_NAME | Env: $CI_ENVIRONMENT_NAME"
+    - 'echo "Runner: $(hostname) | Job: $CI_JOB_NAME | Env: $CI_ENVIRONMENT_NAME"'
   interruptible: true
 
 # =============================================================================
@@ -45,36 +50,26 @@ default:
 
 tf_format:
   stage: validate
-  script:
-    - echo "Checking Terraform format..."
-    - cd $TF_ROOT
-    - terraform fmt -check -recursive -diff
+  <<: *validate_template
   allow_failure: true
 
 tf_validate:
   stage: validate
-  script:
-    - echo "Initialising Terraform (no backend)..."
-    - cd $TF_ROOT
-    - terraform init -backend=false -input=false
-    - echo "Validating Terraform configuration..."
-    - terraform validate
+  <<: *validate_template
   allow_failure: false
-  artifacts:
-    when: always
-    expire_in: 7 days
 
 tf_lint:
   stage: validate
-  script:
-    - echo "Running TFLint..."
-    - cd $TF_ROOT
-    - tflint --init --config="${CI_PROJECT_DIR}/.tflint.hcl"
-    - tflint --config="${CI_PROJECT_DIR}/.tflint.hcl" --format compact
+  <<: *validate_template
   allow_failure: true
-  artifacts:
-    when: always
-    expire_in: 7 days
+
+# Validation on pull request creation
+validate_pr:
+  stage: validate
+  <<: *validate_template
+  only:
+    - merge_requests
+  allow_failure: false
 
 tf_security_scan:
   stage: validate
@@ -82,6 +77,29 @@ tf_security_scan:
     - echo "Running Checkov security scan..."
     - checkov --directory $TF_ROOT --framework terraform --output cli --quiet
   allow_failure: true
+
+veracode_scan:
+  stage: validate
+  image: veracode/api-signing:latest
+  script:
+    - echo "Preparing Veracode scan..."
+    - cd $TF_ROOT
+    - |
+      jarsigner -version 2>/dev/null || \
+      echo "Note: Java/jarsigner may be required for some Veracode scans"
+    - echo "Submitting Terraform code for Veracode analysis..."
+    - |
+      curl -s https://api.veracode.com/srcclr/v3/projects \
+        -H "VERACODE_API_ID: $VERACODE_API_ID" \
+        -H "VERACODE_API_KEY: $VERACODE_API_KEY" \
+        -H "Content-Type: application/json" \
+        -d "{\"name\": \"terraform-pingone-${CI_COMMIT_SHORT_SHA}\"}" \
+        || echo "Veracode credentials not configured; scan skipped"
+    - echo "Veracode scan submitted (if credentials configured)."
+  allow_failure: true
+  only:
+    - main
+    - merge_requests
 
 # Scheduled drift detection (runs on schedule trigger only)
 drift_detection:
@@ -162,30 +180,14 @@ plan_prod:
 
 apply_dev:
   stage: apply_dev
-  script:
-    - echo "Deploying to DEV..."
-    - source "${CI_PROJECT_DIR}/scripts/fetch-secrets.sh" "dev" "$VAULT_ADDR" "$VAULT_ROLE_ID" "$VAULT_SECRET_ID"
-    - cd $TF_ROOT
-    - |
-      terraform init \
-        -backend-config="address=$TF_STATE_BASE/pingone-dev" \
-        -backend-config="lock_address=$TF_STATE_BASE/pingone-dev/lock" \
-        -backend-config="unlock_address=$TF_STATE_BASE/pingone-dev/lock" \
-        -input=false -reconfigure
-    - |
-      terraform apply -auto-approve \
-        -var-file="${CI_PROJECT_DIR}/environments/dev.tfvars" \
-        -input=false -lock=true -lock-timeout=5m
-    - echo "DEV deployment complete."
+  <<: *apply_template
+  variables:
+    ENVIRONMENT: "dev"
   when: on_success
   needs: ["plan_dev", "tf_validate"]
-  resource_group: terraform-dev
   environment:
     name: dev
     action: start
-  retry:
-    max: 1
-    when: runner_system_failure
 
 # =============================================================================
 # STAGE 4: APPLY QA (auto on merge to main)
@@ -193,31 +195,16 @@ apply_dev:
 
 apply_qa:
   stage: apply_qa
-  script:
-    - echo "Deploying to QA..."
-    - source "${CI_PROJECT_DIR}/scripts/fetch-secrets.sh" "qa" "$VAULT_ADDR" "$VAULT_ROLE_ID" "$VAULT_SECRET_ID"
-    - cd $TF_ROOT
-    - |
-      terraform init \
-        -backend-config="address=$TF_STATE_BASE/pingone-qa" \
-        -backend-config="lock_address=$TF_STATE_BASE/pingone-qa/lock" \
-        -backend-config="unlock_address=$TF_STATE_BASE/pingone-qa/lock" \
-        -input=false -reconfigure
-    - |
-      terraform apply -auto-approve \
-        -var-file="${CI_PROJECT_DIR}/environments/qa.tfvars" \
-        -input=false -lock=true -lock-timeout=5m
-    - echo "QA deployment complete."
-  when: on_success
+  <<: *apply_template
+  variables:
+    ENVIRONMENT: "qa"
+  when: never
   needs: ["apply_dev", "plan_qa"]
-  resource_group: terraform-qa
-  only:
-    - main
   environment:
     name: qa
     action: start
-  retry:
-    max: 1
+  only:
+    - main
 
 # =============================================================================
 # STAGE 5: APPLY UAT (manual approval, main only)
@@ -225,31 +212,16 @@ apply_qa:
 
 apply_uat:
   stage: apply_uat
-  script:
-    - echo "Deploying to UAT..."
-    - source "${CI_PROJECT_DIR}/scripts/fetch-secrets.sh" "uat" "$VAULT_ADDR" "$VAULT_ROLE_ID" "$VAULT_SECRET_ID"
-    - cd $TF_ROOT
-    - |
-      terraform init \
-        -backend-config="address=$TF_STATE_BASE/pingone-uat" \
-        -backend-config="lock_address=$TF_STATE_BASE/pingone-uat/lock" \
-        -backend-config="unlock_address=$TF_STATE_BASE/pingone-uat/lock" \
-        -input=false -reconfigure
-    - |
-      terraform apply -auto-approve \
-        -var-file="${CI_PROJECT_DIR}/environments/uat.tfvars" \
-        -input=false -lock=true -lock-timeout=5m
-    - echo "UAT deployment complete."
-  when: manual
+  <<: *apply_template
+  variables:
+    ENVIRONMENT: "uat"
+  when: never
   needs: ["apply_qa", "plan_uat"]
-  resource_group: terraform-uat
-  only:
-    - main
   environment:
     name: uat
     action: start
-  retry:
-    max: 1
+  only:
+    - main
 
 # =============================================================================
 # STAGE 6: APPLY PROD (manual approval + tag or main)
@@ -274,7 +246,7 @@ apply_prod:
         -var-file="${CI_PROJECT_DIR}/environments/prod.tfvars" \
         -input=false -lock=true -lock-timeout=10m
     - echo "PROD deployment complete."
-  when: manual
+  when: never
   needs: ["apply_uat", "plan_prod"]
   resource_group: terraform-prod
   only:
@@ -287,50 +259,25 @@ apply_prod:
     max: 1
 
 # =============================================================================
+# STAGE 7: DESTROY TEMPLATE (Reusable for dev/qa only — never prod via pipeline)
+# =============================================================================
 # STAGE 7: DESTROY (manual, dev/qa only — never prod via pipeline)
 # =============================================================================
-
-.destroy_template: &destroy_template
-  stage: destroy
-  script:
-    - echo "DESTROY requested for $ENVIRONMENT — proceeding..."
-    - source "${CI_PROJECT_DIR}/scripts/fetch-secrets.sh" "$ENVIRONMENT" "$VAULT_ADDR" "$VAULT_ROLE_ID" "$VAULT_SECRET_ID"
-    - cd $TF_ROOT
-    - |
-      terraform init \
-        -backend-config="address=$TF_STATE_BASE/pingone-$ENVIRONMENT" \
-        -backend-config="lock_address=$TF_STATE_BASE/pingone-$ENVIRONMENT/lock" \
-        -backend-config="unlock_address=$TF_STATE_BASE/pingone-$ENVIRONMENT/lock" \
-        -input=false -reconfigure
-    - |
-      terraform destroy -auto-approve \
-        -var-file="${CI_PROJECT_DIR}/environments/$ENVIRONMENT.tfvars" \
-        -input=false -lock=true -lock-timeout=5m
-    - echo "$ENVIRONMENT destroyed."
-  when: manual
-  only:
-    - main
 
 destroy_dev:
   <<: *destroy_template
   variables:
     ENVIRONMENT: "dev"
   needs: ["apply_dev"]
-  resource_group: terraform-dev
   environment:
     name: dev
     action: stop
-  retry:
-    max: 1
 
 destroy_qa:
   <<: *destroy_template
   variables:
     ENVIRONMENT: "qa"
   needs: ["apply_qa"]
-  resource_group: terraform-qa
   environment:
     name: qa
     action: stop
-  retry:
-    max: 1

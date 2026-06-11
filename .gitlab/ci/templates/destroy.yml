@@ -1,0 +1,30 @@
+# =============================================================================
+# Destroy Template — Reusable for dev/qa only (never prod via pipeline)
+# Handles infrastructure teardown with Terraform destroy
+# =============================================================================
+
+.destroy_template: &destroy_template
+  stage: destroy
+  script:
+    - echo "DESTROY requested for $ENVIRONMENT — proceeding..."
+    - source "${CI_PROJECT_DIR}/scripts/fetch-secrets.sh" "$ENVIRONMENT" "$VAULT_ADDR" "$VAULT_ROLE_ID" "$VAULT_SECRET_ID"
+    - cd $TF_ROOT
+    - |
+      terraform init \
+        -backend-config="address=$TF_STATE_BASE/pingone-$ENVIRONMENT" \
+        -backend-config="lock_address=$TF_STATE_BASE/pingone-$ENVIRONMENT/lock" \
+        -backend-config="unlock_address=$TF_STATE_BASE/pingone-$ENVIRONMENT/lock" \
+        -input=false -reconfigure
+    - |
+      terraform destroy -auto-approve \
+        -var-file="${CI_PROJECT_DIR}/environments/$ENVIRONMENT.tfvars" \
+        -input=false -lock=true -lock-timeout=5m
+    - echo "$ENVIRONMENT destroyed."
+  when: manual
+  only:
+    - main
+  resource_group: terraform-$ENVIRONMENT
+  environment:
+    action: stop
+  retry:
+    max: 1

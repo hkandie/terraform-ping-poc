@@ -1,0 +1,20 @@
+# =============================================================================
+# Validation Template — Format, Lint, Validate
+# Reusable across all validation jobs
+# =============================================================================
+
+.validate_template: &validate_template
+  script:
+    - echo "Checking Terraform format..."
+    - cd $TF_ROOT
+    - terraform fmt -check -recursive -diff
+    - echo "Initialising Terraform (no backend)..."
+    - terraform init -backend=false -input=false
+    - echo "Validating Terraform configuration..."
+    - terraform validate
+    - echo "Running TFLint..."
+    - tflint --init --config="${CI_PROJECT_DIR}/.tflint.hcl"
+    - tflint --config="${CI_PROJECT_DIR}/.tflint.hcl" --format compact
+  artifacts:
+    when: always
+    expire_in: 7 days
