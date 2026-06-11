@@ -223,6 +223,89 @@ tflint --version
 
 ---
 
+## 1.1 Network Setup — On-Premises Connectivity
+
+The Linux runner must reach two on-premises services: **Vault** and optionally **PingOne API** (for validation).
+
+### DNS Configuration
+
+Ensure the runner can resolve on-premises hostnames. Check `/etc/resolv.conf` or systemd-resolve:
+
+```bash
+# View current DNS config
+cat /etc/resolv.conf
+
+# Or via systemd-resolve (newer systems)
+systemctl status systemd-resolved
+resolvectl status
+
+# Test resolution
+nslookup vault.internal
+nslookup gitlab.internal
+```
+
+If DNS is not configured, add your on-premises DNS servers:
+
+```bash
+# Temporary (until next reboot)
+sudo tee -a /etc/resolv.conf > /dev/null <<EOF
+nameserver 192.168.1.10
+nameserver 192.168.1.11
+EOF
+
+# Permanent (on systems using systemd-resolved)
+sudo tee /etc/systemd/resolved.conf > /dev/null <<EOF
+[Resolve]
+DNS=192.168.1.10 192.168.1.11
+FallbackDNS=8.8.8.8 8.8.4.4
+Domains=internal
+SearchDomains=internal
+EOF
+sudo systemctl restart systemd-resolved
+```
+
+### Firewall Rules
+
+Ensure the runner can reach:
+- **Vault:** TCP 8200 to `vault.internal`
+- **GitLab:** TCP 443 to `gitlab.internal` (or 22 for SSH)
+- **PingOne API:** TCP 443 to `api.pingone.com`, `auth.pingone.com`
+
+Test connectivity:
+
+```bash
+# Vault
+curl -v http://vault.internal:8200/v1/sys/health
+
+# GitLab
+curl -v https://gitlab.internal/api/v4/
+
+# PingOne
+curl -v https://api.pingone.com/v1/health
+```
+
+### Pre-Pipeline Health Check
+
+Before running the pipeline, validate runner connectivity:
+
+```bash
+cd /path/to/terraform-ping-poc
+export VAULT_ADDR="http://vault.internal:8200"
+export VAULT_ROLE_ID="<role-id>"
+export VAULT_SECRET_ID="<secret-id>"
+
+./scripts/health-check.sh
+```
+
+This script verifies:
+- ✓ DNS resolution for Vault, PingOne, GitLab
+- ✓ Network reachability (TCP connect)
+- ✓ Vault health and seal status
+- ✓ AppRole authentication
+- ✓ Project directory structure
+
+---
+
 ## 2. Terraform State — GitLab-managed Backend
 
 Terraform state is stored in **GitLab's built-in HTTP state backend**. No shared network drive or external object store is required.
@@ -333,6 +416,144 @@ vault kv put secret/pingone/prod client_id="..." client_secret="..." environment
 ```
 
 The PingOne Worker App must have the **Identity Data Admin** role (or scoped equivalent) in the target PingOne environment.
+
+---
+
+## 4.1 Troubleshooting On-Premises Connectivity
+
+### Issue: "Connection refused" or "Connection timed out" to Vault
+
+**Symptoms:**
+```
+curl: (7) Failed to connect to vault.internal port 8200: Connection refused
+```
+
+**Diagnosis & Resolution:**
+
+1. **Verify Vault is running:**
+   ```bash
+   ssh vault-host
+   systemctl status vault
+   ```
+
+2. **Verify network routing from runner to Vault:**
+   ```bash
+   # From runner
+   traceroute vault.internal
+   ping vault.internal
+   telnet vault.internal 8200
+   ```
+
+3. **Check firewall rules:**
+   ```bash
+   # On Vault host
+   sudo iptables -L -n | grep 8200
+   sudo ufw status
+   ```
+
+4. **Verify Vault listener config:**
+   ```bash
+   # On Vault host
+   vault status
+   ```
+
+---
+
+### Issue: "Vault AppRole login failed" or "invalid request"
+
+**Symptoms:**
+```bash
+ERROR: Vault AppRole login failed: 400 Bad Request
+```
+
+**Diagnosis & Resolution:**
+
+1. **Verify AppRole is enabled:**
+   ```bash
+   vault auth list | grep approle
+   ```
+
+2. **Verify Role ID and Secret ID are correct:**
+   ```bash
+   vault read auth/approle/role/gitlab-runner/role-id
+   vault list auth/approle/role/gitlab-runner/secret-id
+   ```
+
+3. **Check if Secret ID has expired:**
+   - Secret IDs have a TTL. Generate a new one:
+   ```bash
+   vault write -f auth/approle/role/gitlab-runner/secret-id
+   ```
+
+4. **Verify the role has the correct policy:**
+   ```bash
+   vault read auth/approle/role/gitlab-runner
+   # Should show token_policies: pingone-reader
+   ```
+
+5. **Test AppRole login manually:**
+   ```bash
+   curl -X POST \
+     -H "Content-Type: application/json" \
+     -d "{\"role_id\": \"$VAULT_ROLE_ID\", \"secret_id\": \"$VAULT_SECRET_ID\"}" \
+     http://vault.internal:8200/v1/auth/approle/login | jq .
+   ```
+
+---
+
+### Issue: "secret at secret/pingone/dev is missing required keys"
+
+**Symptoms:**
+```
+ERROR: Vault secret at secret/data/pingone/dev is missing required keys: client_id, client_secret, environment_id
+```
+
+**Diagnosis & Resolution:**
+
+1. **Verify secret exists and has correct keys:**
+   ```bash
+   vault kv get secret/pingone/dev
+   ```
+
+2. **If missing, create it:**
+   ```bash
+   vault kv put secret/pingone/dev \
+     client_id="<value>" \
+     client_secret="<value>" \
+     environment_id="<value>"
+   ```
+
+3. **Verify the AppRole policy grants read access:**
+   ```bash
+   vault read sys/policies/acl/pingone-reader
+   # Should include: path "secret/data/pingone/*" { capabilities = ["read"] }
+   ```
+
+---
+
+### Issue: "DNS name resolution failed" or "Name or service not known"
+
+**Symptoms:**
+```
+curl: (6) Could not resolve host: vault.internal
+```
+
+**Diagnosis & Resolution:**
+
+1. **Check DNS configuration on runner:**
+   ```bash
+   cat /etc/resolv.conf
+   nslookup vault.internal
+   dig vault.internal
+   ```
+
+2. **If not resolving, add DNS servers:**
+   - See **Section 1.1: Network Setup** above
+
+3. **Test with IP address instead (temporary):**
+   ```bash
+   VAULT_ADDR="http://192.168.1.50:8200" ./scripts/fetch-secrets.sh dev ...
+   ```
 
 ---
 

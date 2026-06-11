@@ -92,7 +92,8 @@ validate → plan → apply_dev → apply_qa (manual) → apply_uat (manual) →
 │   ├── fetch-secrets.ps1      # Vault AppRole secret retrieval
 │   ├── validate.ps1           # Local pre-push validation
 │   ├── apply-promotion.ps1    # Manual promotion outside CI
-│   └── drift-detection.ps1   # Config drift check
+│   ├── drift-detection.sh    # Config drift check
+│   └── health-check.sh       # Runner connectivity validation
 └── docs/
     ├── architecture.md
     ├── runbook.md
