@@ -131,25 +131,27 @@ vault kv get secret/pingone/prod
 
 Before running the full pipeline, confirm each Worker App can authenticate against the PingOne API:
 
-```powershell
+```bash
 # Replace values for the environment you want to test
-$clientId     = "<client-id>"
-$clientSecret = "<client-secret>"
-$envId        = "<environment-id>"
-$region       = "com"  # use "eu" for Europe, "asia" for Asia-Pacific
+CLIENT_ID="<client-id>"
+CLIENT_SECRET="<client-secret>"
+ENV_ID="<environment-id>"
+REGION="com"  # use "eu" for Europe, "asia" for Asia-Pacific
 
-$tokenUrl = "https://auth.pingone.$region/$envId/as/token"
+TOKEN_URL="https://auth.pingone.$REGION/$ENV_ID/as/token"
 
-$body = "grant_type=client_credentials&client_id=$clientId&client_secret=$clientSecret"
-$response = Invoke-RestMethod -Uri $tokenUrl -Method POST `
-  -ContentType "application/x-www-form-urlencoded" -Body $body
+RESPONSE=$(curl -s -X POST "$TOKEN_URL" \
+  -H "Content-Type: application/x-www-form-urlencoded" \
+  -d "grant_type=client_credentials&client_id=$CLIENT_ID&client_secret=$CLIENT_SECRET")
 
-if ($response.access_token) {
-    Write-Host "Authentication successful for environment: $envId"
-    Write-Host "Token type: $($response.token_type) | Expires in: $($response.expires_in)s"
-} else {
-    Write-Error "Authentication failed — check client_id, client_secret, and environment_id"
-}
+ACCESS_TOKEN=$(echo "$RESPONSE" | grep -o '"access_token":"[^"]*' | cut -d'"' -f4)
+
+if [[ -n "$ACCESS_TOKEN" ]]; then
+    echo "✓ Authentication successful for environment: $ENV_ID"
+else
+    echo "✗ Authentication failed — check client_id, client_secret, and environment_id"
+    echo "Response: $RESPONSE"
+fi
 ```
 
 ---
@@ -168,48 +170,55 @@ if ($response.access_token) {
 
 ---
 
-## 1. Windows GitLab Runner
+## 1. Linux GitLab Runner
 
 ### Prerequisites
-- Windows Server 2016+ or Windows 10 Pro
-- PowerShell 5.1+
-- Git in PATH
-- Terraform ≥ 1.5.0 in PATH (`terraform.exe`)
-- TFLint in PATH (`tflint.exe`)
-- Checkov (optional): `pip install checkov`
-- Network access to: GitLab instance, Vault (`http://vault.internal:8200`), PingOne API, state share
+- Linux distro: Ubuntu 20.04 LTS, Ubuntu 22.04 LTS, CentOS 7, or newer
+- Bash shell
+- Git, curl, jq installed
+- Terraform ≥ 1.5.0 in PATH (`terraform` binary)
+- TFLint in PATH (`tflint` binary)
+- Checkov (optional): `pip install checkov` or system package
+- Network access to: GitLab instance, Vault (`http://vault.internal:8200`), PingOne API
 
 ### Install and Register
 
-```powershell
-# Download runner binary
-New-Item -ItemType Directory -Path "C:\gitlab-runner" -Force
-$url = "https://gitlab-runner-downloads.s3.amazonaws.com/latest/binaries/gitlab-runner-windows-amd64.exe"
-Invoke-WebRequest -Uri $url -OutFile "C:\gitlab-runner\gitlab-runner.exe"
+```bash
+# Create a directory for the runner
+sudo mkdir -p /opt/gitlab-runner
+cd /opt/gitlab-runner
 
-# Register (interactive — will prompt for token)
-Set-Location "C:\gitlab-runner"
-.\gitlab-runner.exe register `
-  --url "https://your-gitlab-instance.com/" `
-  --executor "shell" `
-  --shell "powershell" `
-  --description "Windows IaC Runner — PingOne" `
-  --tag-list "windows,terraform,pingone" `
+# Download runner binary (choose appropriate URL for your architecture)
+sudo curl -L \
+  https://gitlab-runner-downloads.s3.amazonaws.com/latest/binaries/gitlab-runner-linux-amd64 \
+  -o gitlab-runner
+sudo chmod +x gitlab-runner
+
+# Create a symbolic link for easy access
+sudo ln -sf /opt/gitlab-runner/gitlab-runner /usr/local/bin/gitlab-runner
+
+# Register the runner (interactive — will prompt for token)
+sudo gitlab-runner register \
+  --url "https://your-gitlab-instance.com/" \
+  --executor "shell" \
+  --shell "bash" \
+  --description "Linux IaC Runner — PingOne" \
+  --tag-list "linux,terraform,pingone" \
   --run-untagged "false"
 
-# Install as Windows service under a dedicated service account
-.\gitlab-runner.exe install `
-  --user "DOMAIN\svc-gitlab-runner" `
-  --password "REDACTED"
-
-Start-Service gitlab-runner
-Get-Service gitlab-runner
+# Install and start the runner as a system service
+sudo gitlab-runner install --user git
+sudo systemctl start gitlab-runner
+sudo systemctl enable gitlab-runner
+sudo systemctl status gitlab-runner
 ```
 
-### PowerShell Execution Policy (required)
+### Verify Installation
 
-```powershell
-Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope LocalMachine
+```bash
+gitlab-runner --version
+terraform --version
+tflint --version
 ```
 
 ---
@@ -231,26 +240,22 @@ GitLab creates the state on first `terraform init`. No directories or permission
 
 ### Accessing state outside the pipeline
 
-For manual operations (e.g., `apply-promotion.ps1`), use a **GitLab Personal Access Token** with `api` scope:
+For manual operations (e.g., `./scripts/apply-promotion.sh`), use a **GitLab Personal Access Token** with `api` scope:
 
-```powershell
+```bash
 # Set once in your shell session — never hardcode
-$env:GITLAB_URL        = "https://gitlab.internal"
-$env:GITLAB_PROJECT_ID = "42"   # numeric ID from GitLab project Settings → General
-$env:GITLAB_TOKEN      = "glpat-xxxxxxxxxxxx"  # PAT with api scope
+export GITLAB_URL="https://gitlab.internal"
+export GITLAB_PROJECT_ID="42"   # numeric ID from GitLab project Settings → General
+export GITLAB_TOKEN="glpat-xxxxxxxxxxxx"  # PAT with api scope
 ```
 
-Then run `apply-promotion.ps1` — it reads these variables automatically.
+Then run `./scripts/apply-promotion.sh` — it reads these variables automatically.
 
 ### Viewing and managing state
 
 In GitLab: **Operate → Terraform states** — lists all state files, their lock status, and serial number.
 
 To delete a state (e.g., after `destroy_dev`):
-```
-GitLab UI: Operate → Terraform states → pingone-dev → Delete
-```
-or via the API:
 ```bash
 curl --header "PRIVATE-TOKEN: <PAT>" \
   --request DELETE \

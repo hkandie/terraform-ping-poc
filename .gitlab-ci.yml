@@ -1,7 +1,7 @@
 ---
 # =============================================================================
 # GitLab CI/CD Pipeline — PingOne IDP Terraform Management
-# Windows GitLab Runner | On-Premises Vault | GitLab-managed Terraform State
+# Linux GitLab Runner | On-Premises Vault | GitLab-managed Terraform State
 # =============================================================================
 
 stages:
@@ -14,7 +14,7 @@ stages:
   - destroy
 
 variables:
-  TF_ROOT: "${CI_PROJECT_DIR}\\terraform"
+  TF_ROOT: "${CI_PROJECT_DIR}/terraform"
   TF_VERSION: "1.8.0"
   VAULT_ADDR: "http://vault.internal:8200"
   VAULT_ROLE_ID: "${VAULT_ROLE_ID}"         # Set in GitLab CI/CD Variables (plain)
@@ -29,15 +29,14 @@ variables:
   TF_LOG: ""
   TF_IN_AUTOMATION: "true"
 
-# Shared defaults for all jobs on Windows runner
+# Shared defaults for all jobs on Linux runner
 default:
   tags:
-    - windows
+    - linux
     - terraform
     - pingone
   before_script:
-    - $ErrorActionPreference = "Stop"
-    - Write-Host "Runner: $env:COMPUTERNAME | Job: $CI_JOB_NAME | Env: $CI_ENVIRONMENT_NAME"
+    - echo "Runner: $(hostname) | Job: $CI_JOB_NAME | Env: $CI_ENVIRONMENT_NAME"
   interruptible: true
 
 # =============================================================================
@@ -47,18 +46,18 @@ default:
 tf_format:
   stage: validate
   script:
-    - Write-Host "Checking Terraform format..."
-    - Set-Location $TF_ROOT
+    - echo "Checking Terraform format..."
+    - cd $TF_ROOT
     - terraform fmt -check -recursive -diff
   allow_failure: true
 
 tf_validate:
   stage: validate
   script:
-    - Write-Host "Initialising Terraform (no backend)..."
-    - Set-Location $TF_ROOT
+    - echo "Initialising Terraform (no backend)..."
+    - cd $TF_ROOT
     - terraform init -backend=false -input=false
-    - Write-Host "Validating Terraform configuration..."
+    - echo "Validating Terraform configuration..."
     - terraform validate
   allow_failure: false
   artifacts:
@@ -68,10 +67,10 @@ tf_validate:
 tf_lint:
   stage: validate
   script:
-    - Write-Host "Running TFLint..."
-    - Set-Location $TF_ROOT
-    - tflint --init --config="$CI_PROJECT_DIR\\.tflint.hcl"
-    - tflint --config="$CI_PROJECT_DIR\\.tflint.hcl" --format compact
+    - echo "Running TFLint..."
+    - cd $TF_ROOT
+    - tflint --init --config="${CI_PROJECT_DIR}/.tflint.hcl"
+    - tflint --config="${CI_PROJECT_DIR}/.tflint.hcl" --format compact
   allow_failure: true
   artifacts:
     when: always
@@ -80,7 +79,7 @@ tf_lint:
 tf_security_scan:
   stage: validate
   script:
-    - Write-Host "Running Checkov security scan..."
+    - echo "Running Checkov security scan..."
     - checkov --directory $TF_ROOT --framework terraform --output cli --quiet
   allow_failure: true
 
@@ -88,9 +87,9 @@ tf_security_scan:
 drift_detection:
   stage: validate
   script:
-    - Write-Host "Running drift detection for prod..."
-    - & "$CI_PROJECT_DIR\scripts\fetch-secrets.ps1" -Environment "prod" -VaultAddr $VAULT_ADDR -VaultRoleId $VAULT_ROLE_ID -VaultSecretId $VAULT_SECRET_ID
-    - & "$CI_PROJECT_DIR\scripts\drift-detection.ps1" -Environment "prod"
+    - echo "Running drift detection for prod..."
+    - source "${CI_PROJECT_DIR}/scripts/fetch-secrets.sh" "prod" "$VAULT_ADDR" "$VAULT_ROLE_ID" "$VAULT_SECRET_ID"
+    - bash "${CI_PROJECT_DIR}/scripts/drift-detection.sh" "prod"
   only:
     - schedules
   allow_failure: true
@@ -102,22 +101,24 @@ drift_detection:
 .plan_template: &plan_template
   stage: plan
   script:
-    - Write-Host "Fetching secrets from vault for $ENVIRONMENT..."
-    - & "$CI_PROJECT_DIR\scripts\fetch-secrets.ps1" -Environment $ENVIRONMENT -VaultAddr $VAULT_ADDR -VaultRoleId $VAULT_ROLE_ID -VaultSecretId $VAULT_SECRET_ID
-    - Set-Location $TF_ROOT
-    - Write-Host "Initialising Terraform backend for $ENVIRONMENT..."
-    - terraform init
-        -backend-config="address=$TF_STATE_BASE/pingone-$ENVIRONMENT"
-        -backend-config="lock_address=$TF_STATE_BASE/pingone-$ENVIRONMENT/lock"
-        -backend-config="unlock_address=$TF_STATE_BASE/pingone-$ENVIRONMENT/lock"
+    - echo "Fetching secrets from vault for $ENVIRONMENT..."
+    - source "${CI_PROJECT_DIR}/scripts/fetch-secrets.sh" "$ENVIRONMENT" "$VAULT_ADDR" "$VAULT_ROLE_ID" "$VAULT_SECRET_ID"
+    - cd $TF_ROOT
+    - echo "Initialising Terraform backend for $ENVIRONMENT..."
+    - |
+      terraform init \
+        -backend-config="address=$TF_STATE_BASE/pingone-$ENVIRONMENT" \
+        -backend-config="lock_address=$TF_STATE_BASE/pingone-$ENVIRONMENT/lock" \
+        -backend-config="unlock_address=$TF_STATE_BASE/pingone-$ENVIRONMENT/lock" \
         -input=false -reconfigure
-    - Write-Host "Generating plan for $ENVIRONMENT..."
-    - terraform plan
-        -var-file="$CI_PROJECT_DIR\environments\$ENVIRONMENT.tfvars"
-        -out="$CI_PROJECT_DIR\tfplan-$ENVIRONMENT.tfplan"
-        -input=false
+    - echo "Generating plan for $ENVIRONMENT..."
+    - |
+      terraform plan \
+        -var-file="${CI_PROJECT_DIR}/environments/$ENVIRONMENT.tfvars" \
+        -out="${CI_PROJECT_DIR}/tfplan-$ENVIRONMENT.tfplan" \
+        -input=false \
         -lock=true
-    - terraform show -json "$CI_PROJECT_DIR\tfplan-$ENVIRONMENT.tfplan" | Out-File "$CI_PROJECT_DIR\tfplan-$ENVIRONMENT.json"
+    - terraform show -json "${CI_PROJECT_DIR}/tfplan-$ENVIRONMENT.tfplan" > "${CI_PROJECT_DIR}/tfplan-$ENVIRONMENT.json"
   artifacts:
     paths:
       - "tfplan-*.tfplan"
@@ -162,18 +163,20 @@ plan_prod:
 apply_dev:
   stage: apply_dev
   script:
-    - Write-Host "Deploying to DEV..."
-    - & "$CI_PROJECT_DIR\scripts\fetch-secrets.ps1" -Environment "dev" -VaultAddr $VAULT_ADDR -VaultRoleId $VAULT_ROLE_ID -VaultSecretId $VAULT_SECRET_ID
-    - Set-Location $TF_ROOT
-    - terraform init
-        -backend-config="address=$TF_STATE_BASE/pingone-dev"
-        -backend-config="lock_address=$TF_STATE_BASE/pingone-dev/lock"
-        -backend-config="unlock_address=$TF_STATE_BASE/pingone-dev/lock"
+    - echo "Deploying to DEV..."
+    - source "${CI_PROJECT_DIR}/scripts/fetch-secrets.sh" "dev" "$VAULT_ADDR" "$VAULT_ROLE_ID" "$VAULT_SECRET_ID"
+    - cd $TF_ROOT
+    - |
+      terraform init \
+        -backend-config="address=$TF_STATE_BASE/pingone-dev" \
+        -backend-config="lock_address=$TF_STATE_BASE/pingone-dev/lock" \
+        -backend-config="unlock_address=$TF_STATE_BASE/pingone-dev/lock" \
         -input=false -reconfigure
-    - terraform apply -auto-approve
-        -var-file="$CI_PROJECT_DIR\environments\dev.tfvars"
+    - |
+      terraform apply -auto-approve \
+        -var-file="${CI_PROJECT_DIR}/environments/dev.tfvars" \
         -input=false -lock=true -lock-timeout=5m
-    - Write-Host "DEV deployment complete."
+    - echo "DEV deployment complete."
   when: on_success
   needs: ["plan_dev", "tf_validate"]
   resource_group: terraform-dev
@@ -191,18 +194,20 @@ apply_dev:
 apply_qa:
   stage: apply_qa
   script:
-    - Write-Host "Deploying to QA..."
-    - & "$CI_PROJECT_DIR\scripts\fetch-secrets.ps1" -Environment "qa" -VaultAddr $VAULT_ADDR -VaultRoleId $VAULT_ROLE_ID -VaultSecretId $VAULT_SECRET_ID
-    - Set-Location $TF_ROOT
-    - terraform init
-        -backend-config="address=$TF_STATE_BASE/pingone-qa"
-        -backend-config="lock_address=$TF_STATE_BASE/pingone-qa/lock"
-        -backend-config="unlock_address=$TF_STATE_BASE/pingone-qa/lock"
+    - echo "Deploying to QA..."
+    - source "${CI_PROJECT_DIR}/scripts/fetch-secrets.sh" "qa" "$VAULT_ADDR" "$VAULT_ROLE_ID" "$VAULT_SECRET_ID"
+    - cd $TF_ROOT
+    - |
+      terraform init \
+        -backend-config="address=$TF_STATE_BASE/pingone-qa" \
+        -backend-config="lock_address=$TF_STATE_BASE/pingone-qa/lock" \
+        -backend-config="unlock_address=$TF_STATE_BASE/pingone-qa/lock" \
         -input=false -reconfigure
-    - terraform apply -auto-approve
-        -var-file="$CI_PROJECT_DIR\environments\qa.tfvars"
+    - |
+      terraform apply -auto-approve \
+        -var-file="${CI_PROJECT_DIR}/environments/qa.tfvars" \
         -input=false -lock=true -lock-timeout=5m
-    - Write-Host "QA deployment complete."
+    - echo "QA deployment complete."
   when: on_success
   needs: ["apply_dev", "plan_qa"]
   resource_group: terraform-qa
@@ -221,18 +226,20 @@ apply_qa:
 apply_uat:
   stage: apply_uat
   script:
-    - Write-Host "Deploying to UAT..."
-    - & "$CI_PROJECT_DIR\scripts\fetch-secrets.ps1" -Environment "uat" -VaultAddr $VAULT_ADDR -VaultRoleId $VAULT_ROLE_ID -VaultSecretId $VAULT_SECRET_ID
-    - Set-Location $TF_ROOT
-    - terraform init
-        -backend-config="address=$TF_STATE_BASE/pingone-uat"
-        -backend-config="lock_address=$TF_STATE_BASE/pingone-uat/lock"
-        -backend-config="unlock_address=$TF_STATE_BASE/pingone-uat/lock"
+    - echo "Deploying to UAT..."
+    - source "${CI_PROJECT_DIR}/scripts/fetch-secrets.sh" "uat" "$VAULT_ADDR" "$VAULT_ROLE_ID" "$VAULT_SECRET_ID"
+    - cd $TF_ROOT
+    - |
+      terraform init \
+        -backend-config="address=$TF_STATE_BASE/pingone-uat" \
+        -backend-config="lock_address=$TF_STATE_BASE/pingone-uat/lock" \
+        -backend-config="unlock_address=$TF_STATE_BASE/pingone-uat/lock" \
         -input=false -reconfigure
-    - terraform apply -auto-approve
-        -var-file="$CI_PROJECT_DIR\environments\uat.tfvars"
+    - |
+      terraform apply -auto-approve \
+        -var-file="${CI_PROJECT_DIR}/environments/uat.tfvars" \
         -input=false -lock=true -lock-timeout=5m
-    - Write-Host "UAT deployment complete."
+    - echo "UAT deployment complete."
   when: manual
   needs: ["apply_qa", "plan_uat"]
   resource_group: terraform-uat
@@ -251,20 +258,22 @@ apply_uat:
 apply_prod:
   stage: apply_prod
   script:
-    - Write-Host "Pre-production drift check..."
-    - & "$CI_PROJECT_DIR\scripts\fetch-secrets.ps1" -Environment "prod" -VaultAddr $VAULT_ADDR -VaultRoleId $VAULT_ROLE_ID -VaultSecretId $VAULT_SECRET_ID
-    - & "$CI_PROJECT_DIR\scripts\drift-detection.ps1" -Environment "prod"
-    - Set-Location $TF_ROOT
-    - terraform init
-        -backend-config="address=$TF_STATE_BASE/pingone-prod"
-        -backend-config="lock_address=$TF_STATE_BASE/pingone-prod/lock"
-        -backend-config="unlock_address=$TF_STATE_BASE/pingone-prod/lock"
+    - echo "Pre-production drift check..."
+    - source "${CI_PROJECT_DIR}/scripts/fetch-secrets.sh" "prod" "$VAULT_ADDR" "$VAULT_ROLE_ID" "$VAULT_SECRET_ID"
+    - bash "${CI_PROJECT_DIR}/scripts/drift-detection.sh" "prod"
+    - cd $TF_ROOT
+    - |
+      terraform init \
+        -backend-config="address=$TF_STATE_BASE/pingone-prod" \
+        -backend-config="lock_address=$TF_STATE_BASE/pingone-prod/lock" \
+        -backend-config="unlock_address=$TF_STATE_BASE/pingone-prod/lock" \
         -input=false -reconfigure
-    - Write-Host "Applying to PROD (tag=$CI_COMMIT_TAG)..."
-    - terraform apply -auto-approve
-        -var-file="$CI_PROJECT_DIR\environments\prod.tfvars"
+    - echo "Applying to PROD (tag=$CI_COMMIT_TAG)..."
+    - |
+      terraform apply -auto-approve \
+        -var-file="${CI_PROJECT_DIR}/environments/prod.tfvars" \
         -input=false -lock=true -lock-timeout=10m
-    - Write-Host "PROD deployment complete."
+    - echo "PROD deployment complete."
   when: manual
   needs: ["apply_uat", "plan_prod"]
   resource_group: terraform-prod
@@ -284,38 +293,44 @@ apply_prod:
 .destroy_template: &destroy_template
   stage: destroy
   script:
-    - Write-Host "DESTROY requested for $ENVIRONMENT — proceeding..."
-    - & "$CI_PROJECT_DIR\scripts\fetch-secrets.ps1" -Environment $ENVIRONMENT -VaultAddr $VAULT_ADDR -VaultRoleId $VAULT_ROLE_ID -VaultSecretId $VAULT_SECRET_ID
-    - Set-Location $TF_ROOT
-    - terraform init
-        -backend-config="address=$TF_STATE_BASE/pingone-$ENVIRONMENT"
-        -backend-config="lock_address=$TF_STATE_BASE/pingone-$ENVIRONMENT/lock"
-        -backend-config="unlock_address=$TF_STATE_BASE/pingone-$ENVIRONMENT/lock"
+    - echo "DESTROY requested for $ENVIRONMENT — proceeding..."
+    - source "${CI_PROJECT_DIR}/scripts/fetch-secrets.sh" "$ENVIRONMENT" "$VAULT_ADDR" "$VAULT_ROLE_ID" "$VAULT_SECRET_ID"
+    - cd $TF_ROOT
+    - |
+      terraform init \
+        -backend-config="address=$TF_STATE_BASE/pingone-$ENVIRONMENT" \
+        -backend-config="lock_address=$TF_STATE_BASE/pingone-$ENVIRONMENT/lock" \
+        -backend-config="unlock_address=$TF_STATE_BASE/pingone-$ENVIRONMENT/lock" \
         -input=false -reconfigure
-    - terraform destroy -auto-approve
-        -var-file="$CI_PROJECT_DIR\environments\$ENVIRONMENT.tfvars"
+    - |
+      terraform destroy -auto-approve \
+        -var-file="${CI_PROJECT_DIR}/environments/$ENVIRONMENT.tfvars" \
         -input=false -lock=true -lock-timeout=5m
-    - Write-Host "$ENVIRONMENT destroyed."
+    - echo "$ENVIRONMENT destroyed."
   when: manual
   only:
     - main
-  environment:
-    action: stop
 
 destroy_dev:
   <<: *destroy_template
   variables:
     ENVIRONMENT: "dev"
+  needs: ["apply_dev"]
   resource_group: terraform-dev
   environment:
     name: dev
     action: stop
+  retry:
+    max: 1
 
 destroy_qa:
   <<: *destroy_template
   variables:
     ENVIRONMENT: "qa"
+  needs: ["apply_qa"]
   resource_group: terraform-qa
   environment:
     name: qa
     action: stop
+  retry:
+    max: 1

@@ -36,32 +36,34 @@ validate → plan → apply_dev → apply_qa (manual) → apply_uat (manual) →
 | `main` | dev (auto) → qa/uat/prod (manual) |
 | `v*` tags | prod (manual, in addition to main) |
 
-## Installing Terraform on Windows
+## Installing Terraform on Linux
 
-1. Go to [https://developer.hashicorp.com/terraform/install#windows](https://developer.hashicorp.com/terraform/install#windows) and download the **Windows AMD64** zip for the required version (≥ 1.5.0).
-2. Extract the zip — it contains a single `terraform.exe` binary.
-3. Move `terraform.exe` to a permanent location, e.g. `C:\tools\terraform\`.
-4. Add that directory to the system `PATH`:
-   - Open **Start → Search "Edit the system environment variables"**
-   - Click **Environment Variables…**
-   - Under **System variables**, select `Path` → **Edit** → **New**
-   - Enter `C:\tools\terraform\` → **OK** through all dialogs
-5. Open a new PowerShell window and verify:
-   ```powershell
+1. Visit [https://developer.hashicorp.com/terraform/install#linux](https://developer.hashicorp.com/terraform/install#linux) and download the appropriate Linux binary for your architecture (usually `amd64`), version ≥ 1.5.0.
+2. Extract the zip — it contains a single `terraform` binary.
+3. Move the binary to a standard location:
+   ```bash
+   sudo mv terraform /usr/local/bin/
+   sudo chmod +x /usr/local/bin/terraform
+   ```
+   Or add it to your user PATH in `~/.bashrc` or `~/.zshrc`:
+   ```bash
+   export PATH="$HOME/tools/terraform:$PATH"
+   ```
+4. Verify installation:
+   ```bash
    terraform -version
    ```
    Expected output: `Terraform v1.x.x`
 
-> The same steps apply for the GitLab Runner service account. Ensure the PATH change is made as a **system** variable (not user) so the runner process inherits it.
+> For the GitLab Runner service account, ensure the PATH is configured at the system level or through the runner's startup script so it inherits the binary location.
 
 ## Prerequisites
 
-- Windows GitLab Runner registered with tags: `windows`, `terraform`, `pingone`
+- Linux GitLab Runner registered with tags: `linux`, `terraform`, `pingone`
 - HashiCorp Vault on-prem with AppRole auth and kv-v2 secrets at `secret/data/pingone/<env>`
 - GitLab CI Variables set: `VAULT_ROLE_ID` (plain), `VAULT_SECRET_ID` (masked)
-- Network share `\\fileserver\terraform-state\` with subdirs: `dev/`, `qa/`, `uat/`, `prod/`
-- Runner service account has read/write access to the state share
-- Terraform ≥ 1.5.0 and TFLint in system PATH on the runner
+- Terraform ≥ 1.5.0, TFLint, curl, and jq installed on the Linux runner
+- All scripts in `scripts/` directory have execute permissions: `chmod +x scripts/*.sh`
 
 ## Repository Structure
 

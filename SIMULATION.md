@@ -90,14 +90,17 @@ The reverted commit produces a plan that reverses the previous change.
 
 For an emergency fix that cannot wait for UAT approval:
 
-```powershell
-# On the runner machine (or a privileged workstation with Vault access)
-.\scripts\apply-promotion.ps1 `
-  -Environment prod `
-  -VaultAddr http://vault.internal:8200 `
-  -VaultRoleId $env:VAULT_ROLE_ID `
-  -VaultSecretId $env:VAULT_SECRET_ID `
-  -StateBasePath \\fileserver\terraform-state
+```bash
+# On a machine with Vault access
+export GITLAB_URL="https://gitlab.internal"
+export GITLAB_PROJECT_ID="42"
+export GITLAB_TOKEN="glpat-xxxxxxxxxxxx"
+
+./scripts/apply-promotion.sh prod \
+  http://vault.internal:8200 \
+  $VAULT_ROLE_ID \
+  $VAULT_SECRET_ID
+```
 ```
 
 The script prompts for explicit confirmation before applying.
